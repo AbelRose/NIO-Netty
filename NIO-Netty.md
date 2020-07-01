@@ -358,45 +358,297 @@ public class NIOServer {
 }
 ```
 
+------
+
+##### 案例:网络多人聊天案例
+
+ChatServer
+
+```java
+package com.abelrose.chat;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+//聊天程序服务器端
+public class ChatServer {
+    private ServerSocketChannel listenerChannel; //监听通道  老大
+    private Selector selector;//选择器对象  间谍
+    private static final int PORT = 9999; //服务器端口
+
+    public ChatServer() {
+        // 最基本的额五个步骤
+        try {
+            // 1. 得到监听通道  老大
+            listenerChannel = ServerSocketChannel.open();
+            // 2. 得到选择器  间谍
+            selector = Selector.open();
+            // 3. 绑定端口
+            listenerChannel.bind(new InetSocketAddress(PORT));
+            // 4. 设置为非阻塞模式
+            listenerChannel.configureBlocking(false);
+            // 5. 将选择器绑定到监听通道并监听accept事件
+            listenerChannel.register(selector, SelectionKey.OP_ACCEPT);
+            printInfo("Chat Server is ready.......");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    //6. 干活儿 淦 ! ! !
+    public void start() throws Exception {
+        try {
+            while (true) { //不停监控
+                if (selector.select(2000) == 0) {
+                    System.out.println("Server:没有客户端找我， 我就干别的事情");
+                    continue;
+                }
+                Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+                while (iterator.hasNext()) {
+                    SelectionKey key = iterator.next();
+                    if (key.isAcceptable()) { //连接请求事件
+                        SocketChannel sc = listenerChannel.accept(); // 接受连接 返回这个连接的通道对象
+                        sc.configureBlocking(false);
+                        sc.register(selector, SelectionKey.OP_READ);
+                        System.out.println(sc.getRemoteAddress().toString().substring(1) + "上线了...");
+                    }
+                    if (key.isReadable()) { //读取数据事件
+                        readMsg(key); // 从指定的key中读取数据
+                    }
+                    //一定要把当前key删掉，防止重复处理
+                    iterator.remove();
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    //读取客户端发来的消息并广播出去
+    public void readMsg(SelectionKey key) throws Exception {
+        SocketChannel channel = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        int count = channel.read(buffer);
+        if (count > 0) {
+            String msg = new String(buffer.array());
+            printInfo(msg);
+            // 发广播 需要两个参数 第一个是当前的通道(需要排除掉) 另一个是广播的信息
+            broadCast(channel, msg);
+        }
+    }
+
+    //给所有的客户端发广播(除了自己) 说实话就i是向通道中写数据
+    public void broadCast(SocketChannel except, String msg) throws Exception {
+        System.out.println("服务器发送了广播...");
+        // 目前有多少个通道 通过selector
+        for (SelectionKey key : selector.keys()) { // 返回所有就绪的通道 就是已经连上的通道
+            Channel targetChannel =  key.channel(); // 找到所有已经就绪的通道 注意这个地方不能直接强转(有可能是各种各样的通道) 需要用父类接收一下
+            // 排除自身
+            if(targetChannel!=except && targetChannel instanceof SocketChannel){
+                // 发广播 就是写数据
+                SocketChannel destChannel = (SocketChannel) targetChannel; // 如果是SocketChannel 那么进行强转;
+                ByteBuffer buffer = ByteBuffer.wrap(msg.getBytes()); // 传到缓冲区
+                destChannel.write(buffer);
+            }
+        }
+    }
+
+    private void printInfo(String str) { //往控制台打印消息
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        System.out.println("[" + sdf.format(new Date()) + "] -> " + str);
+    }
+
+    public static void main(String[] args) throws Exception {
+        new ChatServer().start();
+    }
+}
+
+```
+
+ChatClient
+
+```java
+package cn.itcast.nio.chat;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
+import java.util.Set;
+
+//聊天程序客户端
+public class ChatClient {
+    private final String HOST = "127.0.0.1"; //服务器地址
+    private int PORT = 9999; //服务器端口
+    private SocketChannel socketChannel; //网络通道
+    private String userName; //聊天用户名
+
+    public ChatClient() throws IOException {
+        //1. 得到一个网络通道
+        socketChannel=SocketChannel.open();
+        //2. 设置非阻塞方式
+        socketChannel.configureBlocking(false);
+        //3. 提供服务器端的IP地址和端口号
+        InetSocketAddress address=new InetSocketAddress(HOST,PORT);
+        //4. 连接服务器端
+        if(!socketChannel.connect(address)){
+            while(!socketChannel.finishConnect()){  //nio作为非阻塞式的优势
+                System.out.println("Client:连接服务器端的同时，我还可以干别的一些事情");
+        }
+        }
+        //5. 得到客户端IP地址和端口信息，作为聊天用户名使用
+        userName = socketChannel.getLocalAddress().toString().substring(1);
+        System.out.println("---------------Client(" + userName + ") is ready---------------");
+    }
+
+    //向服务器端发送数据
+    public void sendMsg(String msg) throws Exception{
+        if(msg.equalsIgnoreCase("bye")){  // 如果发送了bye 那么关闭
+            socketChannel.close();
+            return;
+        }
+        msg = userName + "说:" + msg;  // 做一个拼接
+        ByteBuffer buffer = ByteBuffer.wrap(msg.getBytes());  // 通道已经有了 需要重新创建一个Buffer
+        socketChannel.write(buffer);
+    }
+
+    //从服务器端接收数据
+    public void receiveMsg() throws Exception { // 直接从通道中拿数据就可以了
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        int size = socketChannel.read(buffer);
+        if(size > 0){
+            String msg = new String(buffer.array());
+            System.out.println(msg.trim());
+        }
+    }
+}
+
+```
+
+TestChat
+
+```java
+package cn.itcast.nio.chat;
+
+import java.util.Scanner;
+
+//启动聊天程序客户端
+public class TestChat {
+    public static void main(String[] args) throws Exception {
+        ChatClient chatClient = new ChatClient();
+
+        // 接收数据
+        new Thread(){  // 匿名内部类 创建一个单独的线程 用于接收官博过来的消息
+            @Override
+            public void run() {
+                while (true){
+                    try {
+                        chatClient.receiveMsg();
+                        Thread.sleep(2000);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                     }
+                }
+            }
+        }.start();
+
+        // 给服务器端发送消息
+        Scanner scanner = new Scanner(System.in);
+        while (scanner.hasNextLine()){
+            String msg = scanner.nextLine();
+            chatClient.sendMsg(msg);
+        }
+    }
+}
+
+```
+
+------
+
+##### AIO 编程
+
+Asynchronous IO (JDK1.7) 两种模式:Reactor(NIO)和Proactor
+
+## IO 对比总结
+
+- BIO 方式适用于连接数目比较小且固定的架构,这种方式对服务器资源要求比较高,并发局限于应用中,JDK1.4 以前的唯一选择,但程序直观简单易理解。
+  - 同步阻塞:你到饭馆点餐,然后在那等着,啥都干不了,饭馆没做好,你就必须等着!
+- NIO 方式适用于连接数目多且连接比较短(轻操作)的架构,比如***聊天服务器***,并发局限于应用中,编程比较复杂,JDK1.4 开始支持。
+  - 同步非阻塞:你在饭馆点完餐,就去玩儿了。不过玩一会儿,就回饭馆问一声:好了没啊!
+- AIO 方式使用于连接数目多且连接比较长(重操作)的架构,比如***相册服务器***,充分调用 OS 参与并发操作,编程比较复杂,JDK7 开始支持。
+  - 异步非阻塞:饭馆打电话说,我们知道您的位置,一会给你送过来,安心玩儿就可以了,类似于现在的外卖。
+
+| 对比总结     | BIO      | NIO                  | AIO        |
+| ------------ | -------- | -------------------- | ---------- |
+| IO 方式      | 同步阻塞 | 同步非阻塞(多路复用) | 异步非阻塞 |
+| API 使用难度 | 简单     | 复杂                 | 复杂       |
+| 可靠性       | 差       | 好                   | 好         |
+| 吞吐量       | 低       | 高                   | 高         |
+
+------
+
+### Netty
+
+由JBOSS开发,提供异步的、基于事件驱动的网络应用程序框架,用于开发高性能,高可靠性的网络IO程序.
+
+![image-20200701153300990](NIO-Netty.assets/image-20200701153300990.png)
+
+##### Netty整体设计
+
+***线程模型***
+
+- 单线程(NIO网络聊天室案例就是这种模型)
+
+  用***一个线程***通过多路复用搞定所有IO
+
+  ![image-20200701153647351](NIO-Netty.assets/image-20200701153647351.png)
+
+- 线程池
+
+  一个线程专门处理 客户端连接请求
+
+  一个线程池负责IO操作
+
+  ![image-20200701153912590](NIO-Netty.assets/image-20200701153912590.png)
+
+- Nettey模型
+
+  两个线程池 Bossroup 和 WorkerGruop
+
+  Bossroup: 接收客户端连接
+
+  WorkerGruop:  负责网络读写操作
+
+  ![image-20200701154302494](NIO-Netty.assets/image-20200701154302494.png)
+
+  NioEventLoop 表示一个不断循环执行处理任务的线程,每个都包含一个selector 用于监听socket网络通信
+
+  NioEventLoop 内部采用***串行化设计***,
+
+  从消息的读取->解码->处理->编码->发送,始终由 IO 线程 NioEventLoop 负责。
+
+  - 一个 NioEventLoopGroup 下包含多个 NioEventLoop
+  - 每个 NioEventLoop 中包含有一个 Selector,一个 taskQueue
+  - 每个 NioEventLoop 的 Selector 上可以注册监听多个 NioChannel
+  - 每个 NioChannel 只会绑定在唯一的 NioEventLoop 上
+  - 每个 NioChannel 都绑定有一个自己的 ChannelPipeline
+
+##### ***异步模型***
+
+FUTURE  CALLBACK  HANDLER
+
+![image-20200701155954007](NIO-Netty.assets/image-20200701155954007.png)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+##### ***核心API***
 
 
 

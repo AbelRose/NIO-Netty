@@ -33,10 +33,16 @@ public class NIOServer {
             while (keyIterator.hasNext()){
                 SelectionKey key = keyIterator.next();
                 if(key.isAcceptable()){ // 客户端连接事件 能不能连
-
+                    System.out.println("OP_ACCEPT");
+                    SocketChannel socketChannel=serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ, ByteBuffer.allocate(1024));
                 }
                 if(key.isReadable()){ // 读取客户端事件 能不能读
-
+                    SocketChannel channel=(SocketChannel) key.channel();
+                    ByteBuffer buffer=(ByteBuffer) key.attachment();
+                    channel.read(buffer);
+                    System.out.println("客户端发来数据:"+new String(buffer.array()));
                 }
             }
 
